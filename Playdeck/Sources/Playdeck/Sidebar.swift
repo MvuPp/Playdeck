@@ -9,8 +9,10 @@ struct Sidebar: View {
     var body: some View {
         List(selection: $app.selection) {
             Label("Vue d'ensemble", systemImage: "square.grid.2x2").tag(SidebarItem.overview)
+            Label("Tableau de bord", systemImage: "chart.bar.xaxis").tag(SidebarItem.dashboard)
             Label("Réglages", systemImage: "gearshape").tag(SidebarItem.settings)
             Label("Historique", systemImage: "clock.arrow.circlepath").tag(SidebarItem.history)
+            Label("Aide", systemImage: "questionmark.circle").tag(SidebarItem.help)
             Section("Projets") {
                 let projects = app.projects.sorted { $0.project.name.localizedStandardCompare($1.project.name) == .orderedAscending }
                 let names = Dictionary(grouping: projects, by: \.project.name)

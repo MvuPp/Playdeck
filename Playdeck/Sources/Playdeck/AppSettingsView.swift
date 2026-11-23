@@ -5,6 +5,8 @@ import SwiftUI
 enum AppSettings {
     static let watchCodeKey = "watchCode", watchIntervalKey = "watchIntervalSeconds"
     static let defaultCheckKey = "defaultCheck", notifyKey = "notifyOnFinish"
+    static let lintEnabledKey = "lintEnabled"
+    static let qualityExpandedKey = "qualityExpanded"
 
     private static func bool(_ key: String, _ fallback: Bool) -> Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? fallback }
     private static func int(_ key: String, _ fallback: Int) -> Int { UserDefaults.standard.object(forKey: key) as? Int ?? fallback }
@@ -13,6 +15,8 @@ enum AppSettings {
     static var watchInterval: Int { max(int(watchIntervalKey, 5), 1) }
     static var defaultCheck: Bool { bool(defaultCheckKey, true) }
     static var notify: Bool { bool(notifyKey, true) }
+    /// ansible-lint analysis (used only if installed).
+    static var lintEnabled: Bool { bool(lintEnabledKey, true) }
 }
 
 /// « Réglages » tab: code watch, deploy defaults, Ansible path, project folders.
@@ -23,6 +27,7 @@ struct AppSettingsView: View {
     @AppStorage(AppSettings.defaultCheckKey) private var defaultCheck = true
     @AppStorage(AppSettings.notifyKey) private var notify = true
     @AppStorage(AnsibleLocator.settingsKey) private var ansiblePath = ""
+    @AppStorage(AppSettings.lintEnabledKey) private var lintEnabled = true
     @State private var importing = false
 
     var body: some View {
@@ -59,6 +64,23 @@ struct AppSettingsView: View {
             }
 
             Section {
+                Toggle("Analyser les playbooks avec ansible-lint", isOn: $lintEnabled)
+                    .disabled(app.lintInstalled != true)
+                switch app.lintInstalled {
+                case nil:
+                    LabeledContent("ansible-lint") { ProgressView().controlSize(.small) }
+                case true?:
+                    LabeledContent("ansible-lint", value: app.lintPath ?? "installé")
+                case false?:
+                    LintMissingRow(retry: app.locateLint)
+                }
+            } header: { Label("Qualité", systemImage: "checkmark.seal") } footer: {
+                Text("Note A–F par playbook et par projet, problèmes détaillés dans chaque projet. Analyse relancée quand le code change, sans bloquer les déploiements. La vérification de syntaxe (ansible-playbook --syntax-check) est toujours faite.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .onChange(of: lintEnabled) { app.analyzeAll() }
+
+            Section {
                 ForEach(app.folders, id: \.folder) { group in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
@@ -81,6 +103,29 @@ struct AppSettingsView: View {
         .formStyle(.grouped)
         .fileImporter(isPresented: $importing, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { app.add(url) }
+        }
+    }
+}
+
+/// « non installé » + the Homebrew command to copy + re-detect.
+struct LintMissingRow: View {
+    let retry: () -> Void
+    private let command = "brew install ansible-lint"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("ansible-lint n'est pas installé : notes indisponibles.", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            HStack {
+                Text(command).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                Spacer()
+                Button("Copier", systemImage: "doc.on.doc") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(command, forType: .string)
+                }
+                .buttonStyle(.pill())
+                Button("Rechercher à nouveau", systemImage: "arrow.clockwise", action: retry).buttonStyle(.pill(.secondary))
+            }
         }
     }
 }

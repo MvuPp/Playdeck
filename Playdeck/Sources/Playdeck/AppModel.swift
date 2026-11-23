@@ -1,10 +1,11 @@
 import PlaydeckCore
 import Foundation
 import Observation
+import SwiftUI
 
 /// What the sidebar shows in the center.
 enum SidebarItem: Hashable {
-    case overview, settings, history
+    case overview, dashboard, settings, history, help
     case project(String)  // project path
 }
 
@@ -39,6 +40,18 @@ struct PendingDeploy {
     }
 }
 
+/// One line of the dashboard's « À traiter » list.
+struct TodoItem: Identifiable {
+    let id: String
+    let projectPath: String
+    let projectName: String
+    let playbook: String
+    let symbol: String
+    let color: Color
+    let title: String
+    let detail: String
+}
+
 /// One project of the library: hosts, hash, targets, deploy record (.playdeck/), selection.
 @Observable @MainActor final class ProjectModel: Identifiable {
     let project: AnsibleProject
@@ -61,7 +74,26 @@ struct PendingDeploy {
     private(set) var ledgerError: String?
     // Filled while views read it: must not be observed (no state change during a view update).
     @ObservationIgnored private var changesCache: [String: FileChanges] = [:]
-    var runs: [Run] = []
+    var runs: [Run] = [] { didSet { recomputeQuality() } }
+
+    // Quality (ansible-lint, syntax-check, reliability): computed by `analyze` / when runs change, only read by views.
+    /// nil = not analyzed, ansible-lint disabled / missing, or failed (`lintError`).
+    private(set) var lint: LintReport?
+    private(set) var lintError: String?
+    /// Lint issues grouped by file (sorted), for the detail section.
+    private(set) var lintByFile: [(file: String, issues: [LintIssue])] = []
+    /// playbook → `--syntax-check` result.
+    private(set) var syntax: [String: SyntaxCheckResult] = [:]
+    /// Playbook grade, F if its syntax check failed (nil until ansible-lint has run).
+    func grade(_ playbook: String) -> Grade? { lint?.grade(forPlaybook: playbook, syntaxOK: syntax[playbook]?.ok != false) }
+    var projectGrade: Grade? { lint?.projectGrade(syntaxOK: !syntax.values.contains { !$0.ok }) }
+    private(set) var analyzing = false
+    /// playbook → stats of its runs.
+    private(set) var playbookStats: [String: ReliabilityStats] = [:]
+    private(set) var todo: [TodoItem] = []
+    /// hash + lint on/off of the last finished analysis: same key → nothing to do.
+    @ObservationIgnored private var analyzedKey = ""
+
     /// Checked playbooks (relative paths); all by default.
     var checked: Set<String> { didSet { recompute() } }
     var selection: Set<String> = []
@@ -162,6 +194,61 @@ struct PendingDeploy {
         if hash != old { gitCommit = await project.gitCommit() }
     }
 
+    /// syntax-check (+ ansible-lint if `lint`) at the current hash, via the shared cached service (off the main thread).
+    /// One at a time: a call during an analysis returns at once, and the running one starts over if the hash changed meanwhile.
+    func analyze(_ service: QualityService, lint enabled: Bool) async {
+        guard !analyzing, !loading, !version.isEmpty else { return }
+        analyzing = true
+        defer { analyzing = false }
+        while true {
+            let hash = version, key = version + (enabled ? "+lint" : "")
+            guard key != analyzedKey else { return }
+            let p = project
+            async let checks = service.syntaxCheck(p, hash: hash)
+            if enabled {
+                do { lint = try await service.lint(p, hash: hash); lintError = nil } catch { lint = nil; lintError = error.localizedDescription }
+            } else {
+                lint = nil; lintError = nil
+            }
+            syntax = Dictionary((await checks).map { ($0.playbook, $0) }, uniquingKeysWith: { a, _ in a })
+            lintByFile = (lint?.byFile ?? [:]).sorted { $0.key < $1.key }.map { (file: $0.key, issues: $0.value) }
+            analyzedKey = key
+            recomputeQuality()
+        }
+    }
+
+    private func recomputeQuality() {
+        playbookStats = Dictionary(grouping: runs, by: \.playbook).mapValues { Reliability.stats($0) }
+        let recent = Date().addingTimeInterval(-30 * 86_400)
+        var items: [TodoItem] = []
+        func add(_ pb: String, _ kind: String, _ symbol: String, _ color: Color, _ title: String, _ detail: String) {
+            items.append(TodoItem(id: "\(id)|\(pb)|\(kind)", projectPath: id, projectName: project.name, playbook: pb,
+                                  symbol: symbol, color: color, title: title, detail: detail))
+        }
+        for pb in playbookNames {
+            if let r = syntax[pb], !r.ok {
+                add(pb, "syntax", "xmark.octagon.fill", .red, "Syntaxe en erreur",
+                    r.message.split(separator: "\n").first.map(String.init) ?? "ansible-playbook --syntax-check a échoué")
+            }
+            // A syntax error already has its own entry (and forces F): no second « Note F » line for it.
+            if let lint, syntax[pb]?.ok != false, case let g = lint.grade(forPlaybook: pb), g >= .D {
+                add(pb, "grade", "exclamationmark.triangle.fill", g.color, "Note \(g.rawValue)",
+                    "\(lint.playbookIssues[pb]?.count ?? 0) problème(s) ansible-lint")
+            }
+            if let hosts = playbookStats[pb]?.nonIdempotent, !hosts.isEmpty {
+                add(pb, "idempotence", "arrow.triangle.2.circlepath", .orange, "Non idempotent",
+                    "Modifie encore à chaque lancement : " + Set(hosts.map(\.host)).sorted().joined(separator: ", "))
+            }
+            // Latest real deployment of this playbook failed (and is recent).
+            if let last = runs.filter({ $0.playbook == pb && !$0.checkMode && !$0.cancelled }).max(by: { $0.date < $1.date }),
+               last.exitCode != 0, last.date >= recent {
+                add(pb, "failure", "xmark.circle.fill", .red, "Dernier déploiement en échec",
+                    last.date.formatted(date: .abbreviated, time: .shortened) + " · " + last.summary)
+            }
+        }
+        todo = items
+    }
+
     func selectBehind() { selection.formUnion(perHost.filter { $0.value.state.isBehind }.map(\.key)) }
 }
 
@@ -175,7 +262,7 @@ struct PendingDeploy {
     var folders: [(folder: URL, projects: [ProjectModel])] = []
     var selection: SidebarItem? = .overview
     var historyFilter = ""  // project path, "" = all
-    var runs: [Run] = []
+    var runs: [Run] = [] { didSet { daily = Reliability.daily(runs) } }
     var check = AppSettings.defaultCheck
     var pending: PendingDeploy?
     /// sudo password typed in the confirmation; memory only, cleared as soon as the batch starts or is cancelled.
@@ -183,6 +270,13 @@ struct PendingDeploy {
     /// Per-project ansible-vault passwords (account = project path).
     let passwords: any PasswordStore = Keychain()
     var batch: BatchProgress?
+    /// Shared ansible-lint / syntax-check service (cache by hash); nil until ansible-lint has been looked for.
+    private(set) var quality: QualityService?
+    /// nil = still looking for ansible-lint.
+    private(set) var lintInstalled: Bool?
+    private(set) var lintPath: String?
+    /// Real deployments per day over 30 days (dashboard chart).
+    private(set) var daily: [DayCount] = []
     var showLog = true
     /// Between « confirm » and the batch start (keychain read): counts as running.
     private var starting = false
@@ -198,6 +292,7 @@ struct PendingDeploy {
         Self.current = self
         rescan()
         reloadRuns()
+        locateLint()
         // Code watch; settings re-read each turn. Weak: the loop ends if this model is ever released.
         // shortcut: walks every folder each turn (unchanged files are not re-read), switch to FSEvents if projects get huge.
         Task { [weak self] in
@@ -205,6 +300,7 @@ struct PendingDeploy {
                 try? await Task.sleep(for: .seconds(AppSettings.watchInterval))
                 guard let self else { return }
                 if AppSettings.watchCode { for p in self.projects { await p.rehash() } }
+                self.analyzeAll()  // no-op for projects already analyzed at their hash
             }
         }
     }
@@ -223,13 +319,33 @@ struct PendingDeploy {
         }
         for p in projects where old[p.id] == nil {
             p.runs = runs.filter { $0.projectPath == p.id }
-            Task { await p.load(tools: tools) }
+            Task { await p.load(tools: tools); analyze(p) }
         }
         if case .project(let path)? = selection, project(path) == nil { selection = .overview }
     }
 
     func reloadAll() {
-        for p in projects { Task { await p.load(tools: tools) } }
+        for p in projects { Task { await p.load(tools: tools); analyze(p) } }
+    }
+
+    /// Looks for ansible-lint off the main thread, then (re)starts the analyses.
+    func locateLint() {
+        Task {
+            let lint = await Task.detached { AnsibleLocator.locateLint() }.value
+            quality = QualityService(tools: tools, lint: lint)
+            lintInstalled = lint != nil
+            lintPath = lint?.path
+            analyzeAll()
+        }
+    }
+
+    func analyzeAll() { projects.forEach(analyze) }
+
+    /// Never awaited by a deploy: runs in its own task, the service works off the main thread.
+    func analyze(_ p: ProjectModel) {
+        guard let quality else { return }
+        let lint = AppSettings.lintEnabled && lintInstalled == true
+        Task { await p.analyze(quality, lint: lint) }
     }
 
     func add(_ folder: URL) {

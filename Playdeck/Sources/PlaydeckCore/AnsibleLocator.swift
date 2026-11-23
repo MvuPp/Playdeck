@@ -23,7 +23,7 @@ public enum AnsibleLocator {
         for dir in candidates where isComplete(dir) {
             return AnsibleTools(directory: URL(fileURLWithPath: dir))
         }
-        if let found = loginShellLookup(), isComplete((found as NSString).deletingLastPathComponent) {
+        if let found = loginShellLookup("ansible-playbook"), isComplete((found as NSString).deletingLastPathComponent) {
             return AnsibleTools(directory: URL(fileURLWithPath: found).deletingLastPathComponent())
         }
         return nil
@@ -47,10 +47,23 @@ public enum AnsibleLocator {
         }
     }
 
-    private static func loginShellLookup() -> String? {
+    /// `ansible-lint` (optional, has its own ansible-core): same order as `locate` — `savedPath` (dir or binary),
+    /// standard dirs, then a login zsh. Blocking: call off the main thread.
+    public static func locateLint(savedPath: String? = nil) -> URL? {
+        var candidates: [String] = []
+        if let saved = savedPath?.trimmingCharacters(in: .whitespaces), !saved.isEmpty {
+            let expanded = (saved as NSString).expandingTildeInPath
+            candidates.append(expanded.hasSuffix("/ansible-lint") ? expanded : expanded + "/ansible-lint")
+        }
+        candidates += CommandRunner.extraPath.map { $0 + "/ansible-lint" }
+        if let found = candidates.first(where: FileManager.default.isExecutableFile) { return URL(fileURLWithPath: found) }
+        return loginShellLookup("ansible-lint").map { URL(fileURLWithPath: $0) }
+    }
+
+    private static func loginShellLookup(_ name: String) -> String? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-lc", "command -v ansible-playbook"]
+        p.arguments = ["-lc", "command -v \(name)"]
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice

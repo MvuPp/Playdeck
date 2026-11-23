@@ -84,12 +84,44 @@ public enum CommandRunner {
     public static func run(
         _ executable: URL,
         arguments: [String] = [],
-        workingDirectory: URL? = nil
+        workingDirectory: URL? = nil,
+        environment extra: [String: String] = [:]
     ) async throws -> (code: Int32, lines: [String]) {
-        let cmd = try start(executable, arguments: arguments, workingDirectory: workingDirectory)
+        let cmd = try start(executable, arguments: arguments, workingDirectory: workingDirectory, environment: extra)
         var out: [String] = []
         for await line in cmd.lines { out.append(line) }
         return (await cmd.exitCode(), out)
+    }
+
+    /// Runs to completion keeping stdout (e.g. a JSON report) apart from stderr (warnings). Blocks a GCD thread, not the caller.
+    public static func capture(
+        _ executable: URL,
+        arguments: [String] = [],
+        workingDirectory: URL? = nil,
+        environment extra: [String: String] = [:]
+    ) async throws -> (code: Int32, stdout: Data, stderr: String) {
+        try await withCheckedThrowingContinuation { cont in
+            DispatchQueue.global().async {
+                let process = Process()
+                process.executableURL = executable
+                process.arguments = arguments
+                if let workingDirectory { process.currentDirectoryURL = workingDirectory }
+                process.environment = environment(adding: extra, executableDir: executable.deletingLastPathComponent().path)
+                process.standardInput = FileHandle.nullDevice
+                let out = Pipe(), err = Pipe()
+                process.standardOutput = out
+                process.standardError = err
+                do { try process.run() } catch { cont.resume(throwing: error); return }
+                // both pipes drained at once: a full stderr pipe would otherwise block the child
+                let errRead = DispatchGroup()
+                nonisolated(unsafe) var errData = Data()
+                DispatchQueue.global().async(group: errRead) { errData = err.fileHandleForReading.readDataToEndOfFile() }
+                let outData = out.fileHandleForReading.readDataToEndOfFile()
+                errRead.wait()
+                process.waitUntilExit()
+                cont.resume(returning: (process.terminationStatus, outData, String(decoding: errData, as: UTF8.self)))
+            }
+        }
     }
 }
 

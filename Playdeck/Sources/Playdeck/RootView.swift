@@ -17,10 +17,14 @@ struct RootView: View {
                     switch app.selection {
                     case .project(let path)?:
                         if let p = app.project(path) { ProjectView(app: app, project: p).id(path) }
+                    case .dashboard?:
+                        DashboardView(app: app)
                     case .settings?:
                         AppSettingsView(app: app)
                     case .history?:
                         HistoryView(app: app)
+                    case .help?:
+                        HelpView()
                     case .overview?, nil:
                         OverviewView(app: app)
                     }

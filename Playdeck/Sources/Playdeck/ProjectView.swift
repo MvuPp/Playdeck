@@ -14,8 +14,11 @@ struct ProjectView: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(project.project.name).font(.title2.bold())
                     VersionPill(project: project)
+                    if let lint = project.lint {
+                        GradeBadge(grade: project.projectGrade ?? lint.projectGrade(), help: "Note ansible-lint du projet : \(lint.issues.count) problème(s)")
+                    }
                     Spacer()
-                    if project.loading { ProgressView().controlSize(.small) }
+                    if project.loading || project.analyzing { ProgressView().controlSize(.small) }
                 }
                 CounterTiles(counts: project.counts)
                 if let error = project.error {
@@ -37,6 +40,7 @@ struct ProjectView: View {
             Section { DeployBar(app: app, project: project) }
             PlaybookList(project: project).disabled(locked)
             HostChips(project: project).disabled(locked)
+            QualitySection(app: app, project: project)
         }
         .formStyle(.grouped)
     }
@@ -199,8 +203,12 @@ private struct PlaybookList: View {
         let on = project.checked.contains(pb)
         let behind = project.matrix.values.compactMap { $0[pb] }.filter { if case .outdated = $0.state { true } else { false } }.count
         return CheckTile(isOn: on, toggle: { if on { project.checked.remove(pb) } else { project.checked.insert(pb) } }) {
+            if let g = project.grade(pb) {
+                GradeBadge(grade: g, help: "Note ansible-lint : \(project.lint?.playbookIssues[pb]?.count ?? 0) problème(s) (détail plus bas)")
+            }
             Text(pb).lineLimit(1).truncationMode(.middle)
             Spacer()
+            PlaybookHealth(syntax: project.syntax[pb], stats: project.playbookStats[pb])
             if behind > 0 {
                 Text("\(behind) à mettre à jour").font(.caption.bold()).foregroundStyle(.orange)
                     .padding(.horizontal, 6).padding(.vertical, 2)
@@ -264,5 +272,131 @@ private struct HostChips: View {
         }
         .help((["Groupes : " + (host.groups.isEmpty ? "—" : host.groups.joined(separator: ", "))] + details).joined(separator: "\n"))
         .accessibilityLabel("\(host.name), \(status.map { StateKind($0.state).label } ?? "état inconnu")")
+    }
+}
+
+/// Syntax ✓/✗ (message in the tooltip), 30-day success rate, idempotence warning.
+private struct PlaybookHealth: View {
+    let syntax: SyntaxCheckResult?
+    let stats: ReliabilityStats?
+
+    var body: some View {
+        if let hosts = stats?.nonIdempotent, !hosts.isEmpty {
+            let names = Set(hosts.map(\.host)).sorted().joined(separator: ", ")
+            Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.orange)
+                .help("Non idempotent : modifie encore les machines à chaque lancement réussi (\(names))")
+                .accessibilityLabel("Non idempotent sur \(names)")
+        }
+        if let rate = stats?.successRate30d {
+            Text(rate.formatted(.percent.precision(.fractionLength(0))))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(rate >= 0.9 ? Color.green : rate >= 0.5 ? .orange : .red)
+                .help("Déploiements réels réussis sur 30 jours")
+                .accessibilityLabel("Taux de succès sur 30 jours : \(Int((rate * 100).rounded())) %")
+        }
+        if let syntax {
+            Image(systemName: syntax.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                .foregroundStyle(syntax.ok ? Color.green : .red)
+                .help(syntax.ok ? "Syntaxe correcte (--syntax-check)" : syntax.message)
+                .accessibilityLabel(syntax.ok ? "Syntaxe correcte" : "Syntaxe en erreur")
+        }
+    }
+}
+
+/// Analysis state, syntax errors and ansible-lint issues by file (file:line, rule, message, help link).
+private struct QualitySection: View {
+    let app: AppModel
+    let project: ProjectModel
+    @AppStorage(AppSettings.lintEnabledKey) private var lintEnabled = true
+    /// Shared by every project: collapsing it once keeps it collapsed everywhere.
+    @AppStorage(AppSettings.qualityExpandedKey) private var expanded = true
+
+    var body: some View {
+        let syntaxErrors = project.playbookNames.compactMap { project.syntax[$0] }.filter { !$0.ok }
+        Section {
+            // A DisclosureGroup row, not a button in the header: controls in section headers can lose clicks on macOS.
+            DisclosureGroup(isExpanded: $expanded) { details(syntaxErrors) } label: { summary(syntaxErrors.count) }
+        } header: { Label("Qualité", systemImage: "checkmark.seal") }
+    }
+
+    /// One line, also shown when the section is collapsed.
+    private func summary(_ syntaxErrorCount: Int) -> some View {
+        HStack(spacing: 8) {
+            if let grade = project.projectGrade { GradeBadge(grade: grade, help: "Note du projet") }
+            Text(project.analyzing ? "Analyse en cours…"
+                 : [project.lint.map { "\($0.issues.count) problème(s) ansible-lint" },
+                    syntaxErrorCount > 0 ? "\(syntaxErrorCount) erreur(s) de syntaxe" : nil]
+                    .compactMap { $0 }.joined(separator: " · ").nilIfEmpty ?? "Aucune analyse")
+                .foregroundStyle(syntaxErrorCount > 0 ? .red : .secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private func details(_ syntaxErrors: [SyntaxCheckResult]) -> some View {
+            if project.analyzing {
+                Label { Text("Analyse en cours…") } icon: { ProgressView().controlSize(.small) }.foregroundStyle(.secondary)
+            }
+            if app.lintInstalled == false {
+                LintMissingRow(retry: app.locateLint)
+            } else if !lintEnabled {
+                Label("Analyse ansible-lint désactivée (Réglages).", systemImage: "pause.circle").foregroundStyle(.secondary)
+            } else if let error = project.lintError {
+                Label("ansible-lint a échoué : \(error)", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red).font(.callout).textSelection(.enabled).lineLimit(6)
+            } else if let lint = project.lint {
+                Label(lint.issues.isEmpty ? "Aucun problème ansible-lint." : "\(lint.issues.count) problème(s) ansible-lint dans \(project.lintByFile.count) fichier(s)",
+                      systemImage: lint.issues.isEmpty ? "checkmark.seal.fill" : "list.bullet.clipboard")
+                    .foregroundStyle(lint.issues.isEmpty ? Color.green : .primary)
+            }
+            // Ids prefixed: a file can be in both lists, and sibling ForEach sharing ids confuse the Form.
+            ForEach(syntaxErrors.map { ("syntax:" + $0.playbook, $0) }, id: \.0) { _, r in
+                DisclosureGroup {
+                    Text(r.message).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } label: {
+                    Label("Syntaxe en erreur : \(r.playbook)", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                }
+            }
+            ForEach(project.lintByFile.map { ("lint:" + $0.file, $0) }, id: \.0) { _, group in
+                DisclosureGroup {
+                    ForEach(Array(group.issues.enumerated()), id: \.offset) { _, issue in IssueRow(issue: issue) }
+                } label: {
+                    HStack {
+                        Text(group.file).font(.system(.callout, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Text("\(group.issues.count)").font(.caption.bold().monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+private struct IssueRow: View {
+    let issue: LintIssue
+
+    var body: some View {
+        let color: Color = switch issue.severity { case .high: .red; case .medium: .orange; case .low: issue.isFatal ? .red : .secondary }
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Circle().fill(color).frame(width: 7, height: 7).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(issue.line.map { "\(issue.file):\($0)" } ?? issue.file).font(.system(.caption, design: .monospaced))
+                    Text(issue.rule).font(.caption.bold()).foregroundStyle(color)
+                }
+                Text(issue.message).font(.callout).textSelection(.enabled)
+            }
+            Spacer()
+            if let help = issue.helpURL, let url = URL(string: help) {
+                Link(destination: url) { Image(systemName: "questionmark.circle") }
+                    .help("Documentation de la règle \(issue.rule)")
+                    .accessibilityLabel("Aide sur la règle \(issue.rule)")
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }

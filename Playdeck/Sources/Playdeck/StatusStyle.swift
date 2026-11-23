@@ -157,3 +157,27 @@ extension Run {
     }
     var failed: Bool { cancelled || exitCode != 0 || ledgerError != nil }
 }
+
+extension Grade {
+    /// A–B green, C yellow, D orange, E–F red (same palette as the host states).
+    var color: Color {
+        switch self { case .A: .green; case .B: .mint; case .C: .yellow; case .D: .orange; case .E, .F: .red }
+    }
+}
+
+/// ansible-lint grade in a small colored square.
+struct GradeBadge: View {
+    let grade: Grade
+    var help = ""
+
+    var body: some View {
+        Text(grade.rawValue)
+            .font(.caption.bold().monospaced())
+            .frame(width: 20, height: 18)
+            .background(grade.color, in: RoundedRectangle(cornerRadius: 4))
+            .foregroundStyle(grade == .C ? Color.black : .white)
+            .help(help.isEmpty ? "Note ansible-lint \(grade.rawValue)" : help)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Note \(grade.rawValue)")
+    }
+}

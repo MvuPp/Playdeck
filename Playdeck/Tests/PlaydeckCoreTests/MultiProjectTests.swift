@@ -112,6 +112,7 @@ func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
         #expect(started == ["both.yml": ["alpha", "beta", "ghost.invalid"], "db.yml": ["beta"], "web.yml": ["alpha", "ghost.invalid"]])
         #expect(runs.map(\.playbook) == ["both.yml", "db.yml", "web.yml"])
         #expect(runs.allSatisfy { $0.batchID == batch.id && $0.ledgerError == nil && $0.version == p.contentHash() })
+        #expect(runs.allSatisfy { r in r.endDate.map { $0 >= r.date } == true })
         #expect(runs[2].results.map(\.status) == [.success, .unreachable])
         #expect(Set(store.load().map(\.id)) == Set(runs.map(\.id)))
 

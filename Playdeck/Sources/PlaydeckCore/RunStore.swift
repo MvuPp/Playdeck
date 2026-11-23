@@ -21,14 +21,16 @@ public struct Run: Codable, Sendable, Identifiable, Equatable {
     public var batchID: UUID?
     /// -e / tags / --diff / verbosity used (nil = none, and for older runs).
     public var options: DeployOptions?
+    /// When ansible-playbook ended (nil for runs saved before Phase 6).
+    public var endDate: Date?
 
     public init(id: UUID = UUID(), date: Date, projectPath: String, playbook: String, version: String, hosts: [String],
                 checkMode: Bool, exitCode: Int32, cancelled: Bool, results: [HostResult], log: [String], ledgerError: String? = nil,
-                batchID: UUID? = nil, options: DeployOptions? = nil) {
+                batchID: UUID? = nil, options: DeployOptions? = nil, endDate: Date? = nil) {
         self.id = id; self.date = date; self.projectPath = projectPath; self.playbook = playbook; self.version = version
         self.hosts = hosts; self.checkMode = checkMode; self.exitCode = exitCode; self.cancelled = cancelled
         self.results = results; self.log = log; self.ledgerError = ledgerError; self.batchID = batchID
-        self.options = options
+        self.options = options; self.endDate = endDate
     }
 
     public var projectName: String { URL(fileURLWithPath: projectPath).lastPathComponent }

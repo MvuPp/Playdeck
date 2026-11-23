@@ -107,7 +107,7 @@ public enum BatchDeployService {
                 var run = Run(date: date, projectPath: project.url.path, playbook: rel, version: version, hosts: limit,
                               checkMode: check, exitCode: result.exitCode, cancelled: result.cancelled,
                               results: result.hosts, log: result.log, batchID: batch.id,
-                              options: options.isDefault ? nil : options)
+                              options: options.isDefault ? nil : options, endDate: Date())
                 let succeeded = result.hosts.filter { $0.status == .success }.map(\.host)
                 if !check, !result.cancelled, !succeeded.isEmpty {
                     do {
