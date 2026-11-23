@@ -43,4 +43,14 @@ PLIST
 
 codesign --force --sign "${SIGN_IDENTITY:--}" "$APP"
 echo "OK : $(pwd)/$APP"
+
+# Disk image: the app + an Applications shortcut to drag it onto.
+DMG=build/Playdeck-$VERSION.dmg
+STAGE=$(mktemp -d)
+cp -R "$APP" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
+rm -f "$DMG"
+hdiutil create -quiet -volname "Playdeck $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+rm -rf "$STAGE"
+echo "DMG : $(pwd)/$DMG"
 echo "Installer : cp -R \"$(pwd)/$APP\" /Applications/"
