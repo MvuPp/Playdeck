@@ -5,8 +5,10 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-swift build -c release --product Playdeck
-BIN="$(swift build -c release --show-bin-path)/Playdeck"
+# Universal binary: Apple Silicon + Intel.
+ARCHS="--arch arm64 --arch x86_64"
+swift build -c release --product Playdeck $ARCHS
+BIN="$(swift build -c release $ARCHS --show-bin-path)/Playdeck"
 APP=build/Playdeck.app
 BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo 1)
 # Version = latest git tag without its "v" (v0.1.0 -> 0.1.0).
