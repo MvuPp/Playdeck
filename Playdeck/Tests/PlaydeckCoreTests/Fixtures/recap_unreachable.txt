@@ -1,0 +1,19 @@
+
+PLAY [all] *********************************************************************
+
+TASK [ansible.builtin.ping] ****************************************************
+[ERROR]: Task failed: Failed to connect to the host via ssh: ssh: Could not resolve hostname ghost.invalid: nodename nor servname provided, or not known
+Origin: /tmp/fx/ping.yml:4:7
+
+2   gather_facts: false
+3   tasks:
+4     - ansible.builtin.ping:
+        ^ column 7
+
+fatal: [ghost.invalid]: UNREACHABLE! => {"changed": false, "msg": "Task failed: Failed to connect to the host via ssh: ssh: Could not resolve hostname ghost.invalid: nodename nor servname provided, or not known", "unreachable": true}
+ok: [alpha]
+
+PLAY RECAP *********************************************************************
+alpha                      : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+ghost.invalid              : ok=0    changed=0    unreachable=1    failed=0    skipped=0    rescued=0    ignored=0   
+

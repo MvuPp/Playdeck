@@ -1,0 +1,19 @@
+[WARNING]: Could not match supplied host pattern, ignoring: nothing
+
+playbook: multi.yml
+
+  play #1 (web): web	TAGS: []
+    pattern: ['web']
+    hosts (2):
+      alpha
+      beta
+
+  play #2 (db:&nothing): second play	TAGS: []
+    pattern: ['db:&nothing']
+    hosts (0):
+
+  play #3 (all:!beta): all:!beta	TAGS: []
+    pattern: ['all:!beta']
+    hosts (2):
+      alpha
+      gamma

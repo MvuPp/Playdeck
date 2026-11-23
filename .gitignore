@@ -1,0 +1,8 @@
+# Only the Playdeck app is versioned; everything else in this folder stays local.
+/*
+!/.gitignore
+!/README.md
+!/Playdeck/
+
+.DS_Store
+Playdeck/build/

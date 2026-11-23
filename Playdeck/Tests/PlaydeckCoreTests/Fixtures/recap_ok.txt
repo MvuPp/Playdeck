@@ -1,0 +1,15 @@
+
+PLAY [all] *********************************************************************
+
+TASK [ansible.builtin.debug] ***************************************************
+ok: [alpha] => {
+    "msg": "hello"
+}
+ok: [beta] => {
+    "msg": "hello"
+}
+
+PLAY RECAP *********************************************************************
+alpha                      : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+beta                       : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+
